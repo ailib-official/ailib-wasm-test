@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["AI-Protocol Team"]
 license = "MIT OR Apache-2.0"
 description = "Browser WASM module exposing ai-lib-core protocol logic via wasm-bindgen"
-repository = "https://github.com/hiddenpath/ai-wasm-test"
+repository = "https://github.com/ailib-official/ailib-wasm-test"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
