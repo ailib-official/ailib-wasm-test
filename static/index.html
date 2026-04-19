@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ai-wasm-test — WASM Chat Demo</title>
+<title>ailib-wasm-test — WASM Chat Demo</title>
 <style>
 * { box-sizing: border-box; }
 body {
@@ -34,6 +34,8 @@ body {
 @keyframes msgIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 .user { background: linear-gradient(135deg, #42a5f5, #1976d2); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
 .assistant { background: rgba(255,255,255,0.08); color: #e0e0e0; align-self: flex-start; border-bottom-left-radius: 4px; border: 1px solid rgba(255,255,255,0.1); }
+.assistant pre { background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+.assistant code { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
 .system-info {
   background: rgba(255,255,255,0.05); border: 1px solid rgba(79,195,247,0.3);
   border-radius: 8px; padding: 10px 14px; font-size: 13px;
@@ -77,10 +79,12 @@ body {
 
 <div id="input-area">
   <button id="new-chat-btn" class="btn">+ New Chat</button>
-  <select id="model-select">
-    <option value="groq/llama-3.1-8b-instant">Groq &bull; Llama 3.1 8B</option>
-    <option value="deepseek/deepseek-chat">DeepSeek Chat</option>
-  </select>
+        <select id="model-select">
+        <option value="nvidia/z-ai/glm-5.1">NVIDIA &bull; GLM-5.1</option>
+        <option value="nvidia/z-ai/glm4.7">NVIDIA &bull; GLM-4.7</option>
+        <option value="groq/llama-3.1-8b-instant">Groq &bull; Llama 3.1 8B</option>
+        <option value="deepseek/deepseek-chat">DeepSeek Chat</option>
+        </select>
   <textarea id="message-input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
   <button id="send-btn" class="btn">Send</button>
 </div>
@@ -108,8 +112,9 @@ let isStreaming = false;
 let abortController = null;
 
 const PROVIDERS = {
-  groq: { baseUrl: 'https://api.groq.com/openai/v1/chat/completions', apiKeyEnv: 'GROQ_API_KEY' },
-  deepseek: { baseUrl: 'https://api.deepseek.com/chat/completions', apiKeyEnv: 'DEEPSEEK_API_KEY' },
+    nvidia: { baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions', apiKeyEnv: 'NVIDIA_API_KEY' },
+    groq: { baseUrl: 'https://api.groq.com/openai/v1/chat/completions', apiKeyEnv: 'GROQ_API_KEY' },
+    deepseek: { baseUrl: 'https://api.deepseek.com/chat/completions', apiKeyEnv: 'DEEPSEEK_API_KEY' },
 };
 
 function getModelConfig(modelId) {

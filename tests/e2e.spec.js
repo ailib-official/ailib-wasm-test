@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 const BASE_URL = 'http://localhost:3000';
 
-test.describe('ai-wasm-test e2e', () => {
+test.describe('ailib-wasm-test e2e', () => {
   test.beforeAll(async () => {
     // Verify server is up
     const resp = await fetch(`${BASE_URL}/health`);
@@ -21,7 +21,7 @@ test.describe('ai-wasm-test e2e', () => {
     await page.goto(`${BASE_URL}/`);
     await page.waitForLoadState('networkidle');
     const title = await page.title();
-    expect(title).toContain('ai-wasm-test');
+    expect(title).toContain('ailib-wasm-test');
   });
 
   test('wasm module loads successfully', async ({ page }) => {
@@ -63,6 +63,8 @@ test.describe('ai-wasm-test e2e', () => {
   test('chat with Groq (streaming)', async ({ page }) => {
     await page.goto(`${BASE_URL}/`);
     await expect(page.locator('#wasm-status')).toHaveClass(/ready/, { timeout: 10000 });
+
+    await page.selectOption('#model-select', { label: 'Groq • Llama 3.1 8B' });
 
     await page.fill('#message-input', 'Say exactly: greetings from groq');
     await page.click('#send-btn');
@@ -112,26 +114,26 @@ test.describe('ai-wasm-test e2e', () => {
       const isDone = wasm.is_stream_done('[DONE]');
       const isNotDone = wasm.is_stream_done('{"choices":[]}');
 
-      const errClass = wasm.classify_error(429);
-      const errCode = errClass.code();
-      const errRetryable = errClass.retryable();
-      errClass.free();
+  const errClass = wasm.classify_error(429);
+  const errCode = errClass.code();
+  const errRetryable = errClass.retryable();
+  errClass.free();
 
-      return {
-        bodyExists: !!body,
-        streamValue: stream,
-        isDoneOnDone: isDone,
-        isDoneOnData: isNotDone,
-        errCode,
-        errRetryable,
-      };
-    });
+  return {
+    bodyExists: !!body,
+    streamValue: stream,
+    isDoneOnDone: isDone,
+    isDoneOnData: isNotDone,
+    errCode,
+    errRetryable,
+  };
+});
 
-    expect(result.bodyExists).toBeTruthy();
-    expect(result.streamValue).toBeTruthy();
-    expect(result.isDoneOnDone).toBeTruthy();
-    expect(result.isDoneOnData).toBeFalsy();
-    expect(result.errCode).toBe(429);
-    expect(result.errRetryable).toBeTruthy();
+  expect(result.bodyExists).toBeTruthy();
+  expect(result.streamValue).toBeTruthy();
+  expect(result.isDoneOnDone).toBeTruthy();
+  expect(result.isDoneOnData).toBeFalsy();
+  expect(result.errCode).toBe(429);
+  expect(result.errRetryable).toBeTruthy();
   });
 });

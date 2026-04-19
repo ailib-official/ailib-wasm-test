@@ -1,4 +1,4 @@
-//! # ai-wasm-test-server
+//! # ailib-wasm-test-server
 //!
 //! 后端代理服务 — 将浏览器 WASM 构建的请求转发给 AI provider。
 //!
@@ -29,15 +29,23 @@ use tower_http::cors::{Any, CorsLayer};
 pub struct AppState {}
 
 /// Resolve the API key for a provider based on the request URL.
+/// Returns None if no matching provider is found.
 fn resolve_api_key(url: &str) -> Option<String> {
+    // Groq
     if url.contains("api.groq.com") {
         return std::env::var("GROQ_API_KEY").ok();
     }
+    // DeepSeek
     if url.contains("api.deepseek.com") {
         return std::env::var("DEEPSEEK_API_KEY").ok();
     }
+    // OpenAI
     if url.contains("api.openai.com") {
         return std::env::var("OPENAI_API_KEY").ok();
+    }
+    // NVIDIA (NIM)
+    if url.contains("integrate.api.nvidia.com") {
+        return std::env::var("NVIDIA_API_KEY").ok();
     }
     None
 }
@@ -72,7 +80,7 @@ fn static_dir() -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_default();
     let candidates = [
         cwd.join("static"),
-        std::path::PathBuf::from("/home/alex/ai-wasm-test/static"),
+        std::path::PathBuf::from("/home/alex/ailib-wasm-test/static"),
     ];
     for c in &candidates {
         if c.join("index.html").exists() {
@@ -117,6 +125,7 @@ async fn health_handler() -> Json<HealthResponse> {
 }
 
 /// Execute a non-streaming proxy request using libcurl.
+/// Runs in a blocking thread to avoid blocking the tokio runtime.
 fn curl_proxy(url: &str, headers: &serde_json::Map<String, Value>, body: &Value) -> ProxyResponse {
     let mut easy = Easy::new();
     easy.url(url).unwrap();
@@ -184,7 +193,14 @@ async fn proxy_handler(
     (code, Json(result))
 }
 
-/// POST /api/proxy/stream — SSE streaming proxy via curl subprocess.
+/// POST /api/proxy/stream — SSE streaming proxy via curl crate.
+///
+/// Uses the `curl` crate (libcurl FFI) instead of the `curl` binary subprocess
+/// because some AI providers (notably Groq) block the `curl` binary's TLS
+/// fingerprint at Cloudflare level, while the crate's `Easy` handle works.
+///
+/// The curl `Easy` handle runs in a `spawn_blocking` thread; each chunk of
+/// response data is sent through an `mpsc` channel to the async SSE stream.
 async fn proxy_stream_handler(
     State(_state): State<Arc<AppState>>,
     Json(req): Json<ProxyRequest>,
@@ -197,55 +213,98 @@ async fn proxy_stream_handler(
         None => String::new(),
     };
 
-    let mut cmd = tokio::process::Command::new("curl");
-    cmd.arg("-s")
-        .arg("-N")
-        .arg("-X")
-        .arg("POST")
-        .arg(&url)
-        .arg("-H")
-        .arg("Content-Type: application/json")
-        .arg("--data-binary")
-        .arg(&body_str)
-        .arg("--max-time")
-        .arg("120")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
 
+    let url_clone = url.clone();
+    let auth_clone = auth_header.clone();
+    let body_clone = body_str.clone();
+
+    let handle = tokio::task::spawn_blocking(move || {
+        curl_stream_proxy(&url_clone, &auth_clone, &body_clone, tx)
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).filter_map(|line| {
+        let stripped = line.strip_prefix("data: ").unwrap_or(&line).to_string();
+        if stripped.is_empty() {
+            None
+        } else {
+            Some(Ok::<_, Infallible>(
+                axum::response::sse::Event::default().data(stripped),
+            ))
+        }
+    });
+
+    let sse = Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(15)));
+
+    // Spawn a task to await the blocking handle and log any errors
+    tokio::spawn(async move {
+        if let Err(e) = handle.await {
+            eprintln!("curl_stream_proxy task panicked: {}", e);
+        }
+    });
+
+    sse.into_response()
+}
+
+/// Execute a streaming proxy request using the curl crate.
+/// Sends each line of the response body through the provided channel.
+fn curl_stream_proxy(
+    url: &str,
+    auth_header: &str,
+    body: &str,
+    tx: tokio::sync::mpsc::Sender<String>,
+) {
+    let mut easy = Easy::new();
+    easy.url(url).unwrap();
+    easy.post(true).unwrap();
+    easy.timeout(Duration::from_secs(120)).unwrap();
+    easy.post_fields_copy(body.as_bytes()).unwrap();
+
+    let mut list = curl::easy::List::new();
+    list.append("Content-Type: application/json").unwrap();
     if !auth_header.is_empty() {
-        cmd.arg("-H").arg(&auth_header);
+        list.append(auth_header).unwrap();
     }
+    easy.http_headers(list).unwrap();
 
-    match cmd.spawn() {
-        Ok(child) => {
-            let stdout = child.stdout.expect("stdout piped");
-            use tokio::io::{AsyncBufReadExt, BufReader};
-            let reader = BufReader::new(stdout);
+    let tx = std::sync::Arc::new(std::sync::Mutex::new(tx));
+    let tx_clone = tx.clone();
+    let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let buffer_clone = buffer.clone();
 
-            let stream = tokio_stream::wrappers::LinesStream::new(reader.lines());
-            let sse_stream = stream.filter_map(|line_result| match line_result {
-                Ok(line) => {
-                    let stripped = line.strip_prefix("data: ").unwrap_or(&line).to_string();
-                    if stripped.is_empty() {
-                        None
-                    } else {
-                        Some(Ok::<_, Infallible>(
-                            axum::response::sse::Event::default().data(stripped),
-                        ))
+    {
+        let mut transfer = easy.transfer();
+        transfer
+            .write_function(move |data| {
+                let mut buf = buffer_clone.lock().unwrap();
+                buf.extend_from_slice(data);
+                while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                    let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+                    let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
+                    if !line.is_empty() {
+                        let tx_lock = tx_clone.lock().unwrap();
+                        let _ = tx_lock.blocking_send(line);
                     }
                 }
-                Err(_) => None,
-            });
-
-            Sse::new(sse_stream)
-                .keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(15)))
-                .into_response()
+                Ok(data.len())
+            })
+            .unwrap();
+        if let Err(e) = transfer.perform() {
+            eprintln!("curl_stream_proxy error for {}: {}", url, e);
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            format!("Failed to spawn curl: {}", e),
-        )
-            .into_response(),
+    }
+
+    // Flush any remaining data in the buffer
+    {
+        let buf = buffer.lock().unwrap();
+        if !buf.is_empty() {
+            let line = String::from_utf8_lossy(&buf).trim().to_string();
+            if !line.is_empty() {
+                let tx_lock = tx.lock().unwrap();
+                let _ = tx_lock.blocking_send(line);
+            }
+        }
     }
 }
 
@@ -254,7 +313,7 @@ pub async fn run_server() -> anyhow::Result<()> {
     let state = AppState {};
     let app = create_app(state);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    println!("ai-wasm-test-server running on http://localhost:3000");
+    println!("ailib-wasm-test-server running on http://localhost:3000");
     axum::serve(listener, app).await?;
     Ok(())
 }

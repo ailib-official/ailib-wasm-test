@@ -1,15 +1,15 @@
 [package]
-name = "ai-wasm-test-server"
+name = "ailib-wasm-test-server"
 version = "0.1.0"
 edition = "2021"
 authors = ["AI-Protocol Team"]
 license = "MIT OR Apache-2.0"
-description = "Backend proxy server for ai-wasm-test browser chat demo"
-repository = "https://github.com/hiddenpath/ai-wasm-test"
+description = "Backend proxy server for ailib-wasm-test browser chat demo"
+repository = "https://github.com/hiddenpath/ailib-wasm-test"
 rust-version = "1.75"
 
 [[bin]]
-name = "ai-wasm-test-server"
+name = "ailib-wasm-test-server"
 path = "src/main.rs"
 
 [dependencies]

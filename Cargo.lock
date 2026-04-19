@@ -69,7 +69,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai-wasm-test-server"
+name = "ailib-wasm-browser"
+version = "0.1.0"
+dependencies = [
+ "ai-lib-core",
+ "getrandom 0.2.17",
+ "serde",
+ "serde_json",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "ailib-wasm-test-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -83,20 +97,6 @@ dependencies = [
  "tokio-test",
  "tower",
  "tower-http",
-]
-
-[[package]]
-name = "ailib-wasm-browser"
-version = "0.1.0"
-dependencies = [
- "ai-lib-core",
- "getrandom 0.2.17",
- "serde",
- "serde_json",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-test",
- "web-sys",
 ]
 
 [[package]]
