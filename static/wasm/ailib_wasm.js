@@ -1,4 +1,4 @@
-/* @ts-self-types="./ailib_wasm.d.ts" */
+/* @ts-self-types="./ailib_wasm_browser.d.ts" */
 
 /**
  * Result of `build_chat_request`: contains the serialized request body and stream flag.
@@ -117,7 +117,11 @@ export class ErrorClassResult {
 if (Symbol.dispose) ErrorClassResult.prototype[Symbol.dispose] = ErrorClassResult.prototype.free;
 
 /**
- * Result of `parse_chat_response`: contains content, finish reason, and usage.
+ * Result of `parse_chat_response`: contains content, finish reason, and normalized usage.
+ *
+ * Exposes ARCH-003 extended token counters (`reasoning_tokens`,
+ * `cache_read_tokens`, `cache_creation_tokens`) that parity with
+ * ai-lib-ts/ai-lib-go `UnifiedResponse.usage`.
  */
 export class ParseResult {
     static __wrap(ptr) {
@@ -136,6 +140,20 @@ export class ParseResult {
     free() {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_parseresult_free(ptr, 0);
+    }
+    /**
+     * @returns {bigint}
+     */
+    cache_creation_tokens() {
+        const ret = wasm.parseresult_cache_creation_tokens(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {bigint}
+     */
+    cache_read_tokens() {
+        const ret = wasm.parseresult_cache_read_tokens(this.__wbg_ptr);
+        return ret;
     }
     /**
      * @returns {bigint}
@@ -179,6 +197,13 @@ export class ParseResult {
      */
     prompt_tokens() {
         const ret = wasm.parseresult_prompt_tokens(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {bigint}
+     */
+    reasoning_tokens() {
+        const ret = wasm.parseresult_reasoning_tokens(this.__wbg_ptr);
         return ret;
     }
     /**
@@ -251,6 +276,37 @@ export class StreamEventResult {
     }
 }
 if (Symbol.dispose) StreamEventResult.prototype[Symbol.dispose] = StreamEventResult.prototype.free;
+
+/**
+ * Unified versioned entry point (WASM-001). Pass a JSON object with `"op"` and fields
+ * for that operation; returns a JSON string on success.
+ *
+ * Operations: `abi_version`, `capabilities`, `build_request`, `parse_response`,
+ * `parse_stream_event`, `classify_error`, `is_stream_done`. Optional `"version"`
+ * field defaults to `1` and must be `<= BROWSER_ABI_VERSION`.
+ * @param {string} input_json
+ * @returns {string}
+ */
+export function ailib_invoke(input_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(input_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.ailib_invoke(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
 
 /**
  * Build a chat completion request body using ai-lib-core protocol logic.

@@ -1,1 +1,7 @@
 *
+!ailib_wasm.js
+!ailib_wasm.d.ts
+!ailib_wasm_bg.wasm
+!ailib_wasm_bg.wasm.d.ts
+!package.json
+!.gitignore
