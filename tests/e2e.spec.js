@@ -119,6 +119,10 @@ test.describe('ailib-wasm-test e2e', () => {
   const errRetryable = errClass.retryable();
   errClass.free();
 
+  const capJson = wasm.ailib_invoke(JSON.stringify({ op: 'capabilities', version: 1 }));
+  const caps = JSON.parse(capJson);
+  const abiJson = wasm.ailib_invoke(JSON.stringify({ op: 'abi_version' }));
+
   return {
     bodyExists: !!body,
     streamValue: stream,
@@ -126,6 +130,8 @@ test.describe('ailib-wasm-test e2e', () => {
     isDoneOnData: isNotDone,
     errCode,
     errRetryable,
+    capVersion: caps.version,
+    abiInvoke: JSON.parse(abiJson),
   };
 });
 
@@ -135,5 +141,7 @@ test.describe('ailib-wasm-test e2e', () => {
   expect(result.isDoneOnData).toBeFalsy();
   expect(result.errCode).toBe(429);
   expect(result.errRetryable).toBeTruthy();
+  expect(result.capVersion).toBe(1);
+  expect(result.abiInvoke.version).toBe(1);
   });
 });

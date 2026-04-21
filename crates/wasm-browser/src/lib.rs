@@ -8,7 +8,10 @@
 
 use wasm_bindgen::prelude::*;
 
+mod abi;
 mod core_logic;
+
+pub use abi::BROWSER_ABI_VERSION;
 
 /// Result of `build_chat_request`: contains the serialized request body and stream flag.
 #[wasm_bindgen]
@@ -30,7 +33,11 @@ impl BuildResult {
     }
 }
 
-/// Result of `parse_chat_response`: contains content, finish reason, and usage.
+/// Result of `parse_chat_response`: contains content, finish reason, and normalized usage.
+///
+/// Exposes ARCH-003 extended token counters (`reasoning_tokens`,
+/// `cache_read_tokens`, `cache_creation_tokens`) that parity with
+/// ai-lib-ts/ai-lib-go `UnifiedResponse.usage`.
 #[wasm_bindgen]
 pub struct ParseResult {
     content_str: String,
@@ -38,6 +45,9 @@ pub struct ParseResult {
     prompt_t: i64,
     completion_t: i64,
     total_t: i64,
+    reasoning_t: i64,
+    cache_read_t: i64,
+    cache_creation_t: i64,
 }
 
 #[wasm_bindgen]
@@ -56,6 +66,15 @@ impl ParseResult {
     }
     pub fn total_tokens(&self) -> i64 {
         self.total_t
+    }
+    pub fn reasoning_tokens(&self) -> i64 {
+        self.reasoning_t
+    }
+    pub fn cache_read_tokens(&self) -> i64 {
+        self.cache_read_t
+    }
+    pub fn cache_creation_tokens(&self) -> i64 {
+        self.cache_creation_t
     }
 }
 
@@ -126,12 +145,15 @@ pub fn build_chat_request(
 #[wasm_bindgen]
 pub fn parse_chat_response(response_json: &str) -> Result<ParseResult, JsValue> {
     core_logic::parse_chat_response(response_json)
-        .map(|(content, finish, pt, ct, tt)| ParseResult {
-            content_str: content,
-            finish_reason_str: finish,
-            prompt_t: pt,
-            completion_t: ct,
-            total_t: tt,
+        .map(|r| ParseResult {
+            content_str: r.content,
+            finish_reason_str: r.finish_reason,
+            prompt_t: r.prompt_tokens,
+            completion_t: r.completion_tokens,
+            total_t: r.total_tokens,
+            reasoning_t: r.reasoning_tokens,
+            cache_read_t: r.cache_read_tokens,
+            cache_creation_t: r.cache_creation_tokens,
         })
         .map_err(|e| JsValue::from_str(&e))
 }
@@ -164,4 +186,15 @@ pub fn classify_error(status_code: u16) -> ErrorClassResult {
 #[wasm_bindgen]
 pub fn is_stream_done(data: &str) -> bool {
     core_logic::is_stream_done(data)
+}
+
+/// Unified versioned entry point (WASM-001). Pass a JSON object with `"op"` and fields
+/// for that operation; returns a JSON string on success.
+///
+/// Operations: `abi_version`, `capabilities`, `build_request`, `parse_response`,
+/// `parse_stream_event`, `classify_error`, `is_stream_done`. Optional `"version"`
+/// field defaults to `1` and must be `<= BROWSER_ABI_VERSION`.
+#[wasm_bindgen(js_name = ailib_invoke)]
+pub fn ailib_invoke_json(input_json: &str) -> Result<String, JsValue> {
+    abi::invoke(input_json).map_err(|e| JsValue::from_str(&e))
 }
