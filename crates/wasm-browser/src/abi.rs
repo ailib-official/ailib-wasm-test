@@ -25,8 +25,7 @@ fn require_u16(v: &Value, key: &str) -> Result<u16, String> {
 
 /// Dispatch JSON `{ "op": "...", ... }` to core_logic. Returns a JSON string payload.
 pub fn invoke(input_json: &str) -> Result<String, String> {
-    let v: Value =
-        serde_json::from_str(input_json).map_err(|e| format!("input json: {}", e))?;
+    let v: Value = serde_json::from_str(input_json).map_err(|e| format!("input json: {}", e))?;
     let ctx_version = v.get("version").and_then(|x| x.as_u64()).unwrap_or(1) as u32;
     if ctx_version > BROWSER_ABI_VERSION {
         return Err(format!(
@@ -67,10 +66,7 @@ pub fn invoke(input_json: &str) -> Result<String, String> {
                 .get("model")
                 .and_then(|x| x.as_str())
                 .ok_or_else(|| "build_request: missing \"model\"".to_string())?;
-            let temperature = v
-                .get("temperature")
-                .and_then(|x| x.as_f64())
-                .unwrap_or(0.7);
+            let temperature = v.get("temperature").and_then(|x| x.as_f64()).unwrap_or(0.7);
             let max_tokens = v
                 .get("max_tokens")
                 .and_then(|x| x.as_f64())
@@ -95,7 +91,7 @@ pub fn invoke(input_json: &str) -> Result<String, String> {
                 .and_then(|x| x.as_str())
                 .ok_or_else(|| "parse_response: missing \"response_json\" string".to_string())?;
             let r = crate::core_logic::parse_chat_response(response_json)?;
-            Ok(serde_json::to_string(&json!({
+            serde_json::to_string(&json!({
                 "content": r.content,
                 "finish_reason": r.finish_reason,
                 "prompt_tokens": r.prompt_tokens,
@@ -105,7 +101,7 @@ pub fn invoke(input_json: &str) -> Result<String, String> {
                 "cache_read_tokens": r.cache_read_tokens,
                 "cache_creation_tokens": r.cache_creation_tokens,
             }))
-            .unwrap())
+            .map_err(|e| format!("parse_response out: {}", e))
         }
 
         "parse_stream_event" => {
@@ -178,7 +174,10 @@ mod tests {
 
     #[test]
     fn invoke_rejects_future_ctx_version() {
-        let j = format!(r#"{{"op":"abi_version","version":{}}}"#, BROWSER_ABI_VERSION + 99);
+        let j = format!(
+            r#"{{"op":"abi_version","version":{}}}"#,
+            BROWSER_ABI_VERSION + 99
+        );
         assert!(invoke(&j).is_err());
     }
 }

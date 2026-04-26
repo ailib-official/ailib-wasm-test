@@ -5,11 +5,16 @@
 //! Each function returns `Result<..., String>` so the wasm_bindgen wrappers
 //! only need to convert `String` → `JsValue`.
 
-use ai_lib_core::drivers::{OpenAiDriver, ProviderDriver};
+use ai_lib_core::drivers::{AnthropicDriver, OpenAiDriver, ProviderDriver};
 use ai_lib_core::error_code::StandardErrorCode;
 use ai_lib_core::protocol::v2::capabilities::Capability;
+use ai_lib_core::types::events::StreamingEvent;
 use ai_lib_core::types::message::Message;
-use serde_json::Value;
+use serde_json::{json, Value};
+
+fn wasm_browser_caps() -> Vec<Capability> {
+    vec![Capability::Text, Capability::Streaming]
+}
 
 /// Build a chat completion request body using ai-lib-core's OpenAiDriver.
 pub fn build_chat_request(
@@ -19,26 +24,10 @@ pub fn build_chat_request(
     max_tokens: f64,
     stream: bool,
 ) -> Result<(String, bool), String> {
-    let messages: Vec<Value> =
+    let ai_messages: Vec<Message> =
         serde_json::from_str(messages_json).map_err(|e| format!("Invalid messages JSON: {}", e))?;
 
-    let ai_messages: Vec<Message> = messages
-        .iter()
-        .map(|m| {
-            let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-            let content = m.get("content").and_then(|c| c.as_str()).unwrap_or("");
-            match role {
-                "system" => Message::system(content),
-                "assistant" => Message::assistant(content),
-                _ => Message::user(content),
-            }
-        })
-        .collect();
-
-    let driver = OpenAiDriver::new(
-        "wasm-browser",
-        vec![Capability::Text, Capability::Streaming],
-    );
+    let driver = OpenAiDriver::new("wasm-browser", wasm_browser_caps());
     let request = driver
         .build_request(
             &ai_messages,
@@ -73,76 +62,42 @@ pub struct ParsedResponse {
 
 /// Parse a non-streaming chat completion response.
 ///
-/// Token extraction is **ARCH-003 aligned with ai-lib-ts/ai-lib-go**: reasoning
-/// tokens are pulled from either the flat `reasoning_tokens` or the OpenAI
-/// nested `usage.completion_tokens_details.reasoning_tokens`; cache-read tokens
-/// accept `cache_read_tokens`, the OpenAI `usage.prompt_tokens_details.cached_tokens`,
-/// and Anthropic `cache_read_input_tokens`; cache-creation tokens accept
-/// `cache_creation_tokens`, Anthropic `cache_creation_input_tokens`, and the
-/// legacy `cache_write_tokens` alias.
+/// Uses `ai-lib-core` `OpenAiDriver::parse_response` so **usage and content**
+/// match the Rust runtime. Token extraction in `usage` is **ARCH-003**
+/// (unified `parse_openai_usage_value` in `ai-lib-core`).
 pub fn parse_chat_response(response_json: &str) -> Result<ParsedResponse, String> {
-    let resp: Value =
+    let body: Value =
         serde_json::from_str(response_json).map_err(|e| format!("Invalid response JSON: {}", e))?;
+    let driver = OpenAiDriver::new("wasm-browser", wasm_browser_caps());
+    let dr = driver
+        .parse_response(&body)
+        .map_err(|e| format!("parse_response: {:?}", e))?;
 
-    let content = resp
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("")
-        .to_string();
+    let u64_to_i = |n: u64| n as i64;
 
-    let finish_reason = resp
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("finish_reason"))
-        .and_then(|f| f.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let usage = resp.get("usage");
-    let flat = |key: &str| -> i64 {
-        usage
-            .and_then(|u| u.get(key))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
+    let (reasoning_tokens, cache_read_tokens, cache_creation_tokens) = match &dr.usage {
+        Some(u) => (
+            u.reasoning_tokens.map(u64_to_i).unwrap_or(0),
+            u.cache_read_tokens.map(u64_to_i).unwrap_or(0),
+            u.cache_creation_tokens.map(u64_to_i).unwrap_or(0),
+        ),
+        None => (0, 0, 0),
     };
-    let nested = |outer: &str, inner: &str| -> i64 {
-        usage
-            .and_then(|u| u.get(outer))
-            .and_then(|d| d.get(inner))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
+    let (prompt_tokens, completion_tokens, total_tokens) = match &dr.usage {
+        Some(u) => (
+            u64_to_i(u.prompt_tokens),
+            u64_to_i(u.completion_tokens),
+            u64_to_i(u.total_tokens),
+        ),
+        None => (0, 0, 0),
     };
-    let first_nonzero = |vals: &[i64]| -> i64 { *vals.iter().find(|&&v| v != 0).unwrap_or(&0) };
-
-    // Accept OpenAI (prompt_tokens/completion_tokens) and Anthropic (input_tokens/output_tokens)
-    let prompt_tokens = first_nonzero(&[flat("prompt_tokens"), flat("input_tokens")]);
-    let completion_tokens = first_nonzero(&[flat("completion_tokens"), flat("output_tokens")]);
-    let mut total_tokens = flat("total_tokens");
-    if total_tokens == 0 && (prompt_tokens > 0 || completion_tokens > 0) {
-        total_tokens = prompt_tokens + completion_tokens;
-    }
-
-    let reasoning_tokens = first_nonzero(&[
-        flat("reasoning_tokens"),
-        nested("completion_tokens_details", "reasoning_tokens"),
-    ]);
-    let cache_read_tokens = first_nonzero(&[
-        flat("cache_read_tokens"),
-        nested("prompt_tokens_details", "cached_tokens"),
-        flat("cache_read_input_tokens"),
-    ]);
-    let cache_creation_tokens = first_nonzero(&[
-        flat("cache_creation_tokens"),
-        flat("cache_creation_input_tokens"),
-        flat("cache_write_tokens"),
-    ]);
 
     Ok(ParsedResponse {
-        content,
-        finish_reason,
+        content: dr.content.unwrap_or_default(),
+        finish_reason: dr
+            .finish_reason
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string()),
         prompt_tokens,
         completion_tokens,
         total_tokens,
@@ -152,145 +107,137 @@ pub fn parse_chat_response(response_json: &str) -> Result<ParsedResponse, String
     })
 }
 
+/// Map `StreamingEvent` to the browser WASM (`event_type`, `payload`, `is_terminal`) triple.
+fn map_streaming_to_wasm_tuple(ev: &StreamingEvent) -> Option<(String, String, bool)> {
+    use StreamingEvent as E;
+    match ev {
+        E::PartialContentDelta { content, .. } if !content.is_empty() => {
+            Some(("content_delta".into(), content.clone(), false))
+        }
+        E::ThinkingDelta { thinking, .. } if !thinking.is_empty() => {
+            Some(("thinking_delta".into(), thinking.clone(), false))
+        }
+        E::StreamEnd { finish_reason } => Some((
+            "stream_end".into(),
+            finish_reason
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "stop".to_string()),
+            true,
+        )),
+        E::StreamError { error, .. } => Some(("stream_error".into(), error.to_string(), false)),
+        E::PartialToolCall {
+            tool_call_id,
+            arguments,
+            index,
+            ..
+        } => {
+            let mut m = serde_json::Map::new();
+            m.insert("index".into(), json!(index.unwrap_or(0)));
+            if !tool_call_id.is_empty() {
+                m.insert("id".into(), json!(tool_call_id));
+            }
+            m.insert("arguments".into(), json!(arguments));
+            Some((
+                "tool_call_delta".into(),
+                serde_json::Value::Object(m).to_string(),
+                false,
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn try_parse_with_drivers(data: &str) -> Option<(String, String, bool)> {
+    let caps = wasm_browser_caps();
+    let d_anth = AnthropicDriver::new("wasm-browser", caps.clone());
+    if let Ok(Some(ev)) = d_anth.parse_stream_event(data) {
+        if let Some(t) = map_streaming_to_wasm_tuple(&ev) {
+            return Some(t);
+        }
+    }
+    let d_open = OpenAiDriver::new("wasm-browser", caps);
+    if let Ok(Some(ev)) = d_open.parse_stream_event(data) {
+        if let Some(t) = map_streaming_to_wasm_tuple(&ev) {
+            return Some(t);
+        }
+    }
+    None
+}
+
+/// OpenAI-style `choices[0].*` path not fully covered by `OpenAiDriver` (e.g. streaming
+/// `tool_calls` array fragments, `role` delta, or nonstandard `finish_reason` values).
+fn parse_stream_openai_choices_residue(event: &Value) -> Option<(String, String, bool)> {
+    let ch0 = event.get("choices")?.get(0)?;
+    if let Some(fr) = ch0.get("finish_reason").and_then(|f| f.as_str()) {
+        if ["stop", "length", "content_filter", "tool_calls"].contains(&fr) {
+            return Some(("stream_end".into(), fr.to_string(), true));
+        }
+    }
+    let delta = ch0.get("delta")?;
+    if let Some(calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+        if let Some(first) = calls.first() {
+            let index = first.get("index").and_then(|v| v.as_i64()).unwrap_or(0);
+            let id = first.get("id").and_then(|v| v.as_str());
+            let func = first.get("function");
+            let name = func.and_then(|f| f.get("name")).and_then(|v| v.as_str());
+            let args = func
+                .and_then(|f| f.get("arguments"))
+                .and_then(|v| v.as_str());
+            let mut payload = serde_json::Map::new();
+            payload.insert("index".into(), serde_json::Value::from(index));
+            if let Some(id) = id {
+                payload.insert("id".into(), serde_json::Value::from(id));
+            }
+            if let Some(name) = name {
+                payload.insert("name".into(), serde_json::Value::from(name));
+            }
+            if let Some(args) = args {
+                payload.insert("arguments".into(), serde_json::Value::from(args));
+            }
+            return Some((
+                "tool_call_delta".into(),
+                serde_json::Value::Object(payload).to_string(),
+                false,
+            ));
+        }
+    }
+    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+        return Some(("content_delta".into(), content.to_string(), false));
+    }
+    if let Some(t) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+        if !t.is_empty() {
+            return Some(("thinking_delta".into(), t.to_string(), false));
+        }
+    }
+    if let Some(t) = delta.get("reasoning").and_then(|c| c.as_str()) {
+        if !t.is_empty() {
+            return Some(("thinking_delta".into(), t.to_string(), false));
+        }
+    }
+    if delta.get("role").is_some() {
+        return Some(("role_assign".into(), String::new(), false));
+    }
+    None
+}
+
 /// Parse a single SSE stream event data payload.
 ///
-/// Supports both the OpenAI-compatible format (`choices[0].delta.*`) and the
-/// Anthropic Messages streaming format (`type: content_block_delta` with
-/// `delta.type = text_delta | thinking_delta`, plus `message_stop`). Returns
-/// `(event_type, payload, is_terminal)`. `event_type` values:
-/// - `content_delta` — regular assistant text delta
-/// - `thinking_delta` — reasoning / thinking stream (gen-002)
-/// - `tool_call_delta` — JSON fragment of a streaming tool call (gen-004);
-///   `payload` is a compact JSON object `{"index":i,"id":?,"name":?,"arguments":?}`
-/// - `role_assign` — initial role assignment
-/// - `stream_end` — terminal `[DONE]` / `stop` / Anthropic `message_stop`
-/// - `unknown` — no recognized delta content
+/// First delegates to `ai-lib-core` drivers (Anthropic then OpenAI), then falls
+/// back to a small **OpenAI streaming residue** for `tool_calls` / `role` deltas.
+/// Returns `(event_type, payload, is_terminal)`.
 pub fn parse_stream_event(data: &str) -> Result<(String, String, bool), String> {
     if is_stream_done(data) {
-        return Ok(("stream_end".to_string(), "".to_string(), true));
+        return Ok(("stream_end".to_string(), String::new(), true));
     }
-
-    let event: Value =
-        serde_json::from_str(data).map_err(|e| format!("Invalid stream event JSON: {}", e))?;
-
-    // --- Anthropic Messages streaming ---
-    if let Some(kind) = event.get("type").and_then(|t| t.as_str()) {
-        match kind {
-            "message_stop" => return Ok(("stream_end".to_string(), "stop".to_string(), true)),
-            "content_block_delta" => {
-                if let Some(delta) = event.get("delta") {
-                    match delta.get("type").and_then(|t| t.as_str()) {
-                        Some("text_delta") => {
-                            let text = delta.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                            return Ok(("content_delta".to_string(), text.to_string(), false));
-                        }
-                        Some("thinking_delta") => {
-                            let text = delta
-                                .get("thinking")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("");
-                            return Ok(("thinking_delta".to_string(), text.to_string(), false));
-                        }
-                        Some("input_json_delta") => {
-                            let partial = delta
-                                .get("partial_json")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("");
-                            let payload = serde_json::json!({
-                                "index": event.get("index").and_then(|v| v.as_i64()).unwrap_or(0),
-                                "arguments": partial,
-                            });
-                            return Ok((
-                                "tool_call_delta".to_string(),
-                                payload.to_string(),
-                                false,
-                            ));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            "message_delta" => {
-                // Anthropic stop_reason lives here
-                if let Some(reason) = event
-                    .get("delta")
-                    .and_then(|d| d.get("stop_reason"))
-                    .and_then(|r| r.as_str())
-                {
-                    return Ok(("stream_end".to_string(), reason.to_string(), true));
-                }
-            }
-            _ => {}
-        }
+    if let Some(t) = try_parse_with_drivers(data) {
+        return Ok(t);
     }
-
-    // --- OpenAI-compatible streaming ---
-    let delta = event
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("delta"));
-
-    let finish_reason = event
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("finish_reason"))
-        .and_then(|f| f.as_str());
-
-    if let Some(reason) = finish_reason {
-        if reason == "stop"
-            || reason == "length"
-            || reason == "content_filter"
-            || reason == "tool_calls"
-        {
-            return Ok(("stream_end".to_string(), reason.to_string(), true));
-        }
+    let event: Value = serde_json::from_str(data.trim())
+        .map_err(|e| format!("Invalid stream event JSON: {}", e))?;
+    if let Some(t) = parse_stream_openai_choices_residue(&event) {
+        return Ok(t);
     }
-
-    if let Some(delta) = delta {
-        // OpenAI tool_calls delta — surface the first fragment as JSON so the
-        // JS-side ToolCallAccumulator can concatenate arguments across frames.
-        if let Some(calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
-            if let Some(first) = calls.first() {
-                let index = first.get("index").and_then(|v| v.as_i64()).unwrap_or(0);
-                let id = first.get("id").and_then(|v| v.as_str());
-                let func = first.get("function");
-                let name = func.and_then(|f| f.get("name")).and_then(|v| v.as_str());
-                let args = func
-                    .and_then(|f| f.get("arguments"))
-                    .and_then(|v| v.as_str());
-                let mut payload = serde_json::Map::new();
-                payload.insert("index".into(), serde_json::Value::from(index));
-                if let Some(id) = id {
-                    payload.insert("id".into(), serde_json::Value::from(id));
-                }
-                if let Some(name) = name {
-                    payload.insert("name".into(), serde_json::Value::from(name));
-                }
-                if let Some(args) = args {
-                    payload.insert("arguments".into(), serde_json::Value::from(args));
-                }
-                return Ok((
-                    "tool_call_delta".to_string(),
-                    serde_json::Value::Object(payload).to_string(),
-                    false,
-                ));
-            }
-        }
-        if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-            return Ok(("content_delta".to_string(), content.to_string(), false));
-        }
-        // reasoning_content (DeepSeek/Qwen style) or OpenAI reasoning (o1) via `reasoning`
-        if let Some(thinking) = delta.get("reasoning_content").and_then(|t| t.as_str()) {
-            return Ok(("thinking_delta".to_string(), thinking.to_string(), false));
-        }
-        if let Some(thinking) = delta.get("reasoning").and_then(|t| t.as_str()) {
-            return Ok(("thinking_delta".to_string(), thinking.to_string(), false));
-        }
-        if delta.get("role").is_some() {
-            return Ok(("role_assign".to_string(), String::new(), false));
-        }
-    }
-
     Ok(("unknown".to_string(), String::new(), false))
 }
 
@@ -350,6 +297,21 @@ mod tests {
         let parsed: Value = serde_json::from_str(&body).unwrap();
         let msgs = parsed["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn test_build_chat_request_tool_message_includes_tool_call_id() {
+        let messages = r#"[
+            {"role":"user","content":"q"},
+            {"role":"tool","content":"r","tool_call_id":"call_1"}
+        ]"#;
+        let result = build_chat_request(messages, "m", 0.7, 100.0, false);
+        assert!(result.is_ok());
+        let (body, _) = result.unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        let msgs = parsed["messages"].as_array().unwrap();
+        assert_eq!(msgs[1]["role"], "tool");
+        assert_eq!(msgs[1]["tool_call_id"], "call_1");
     }
 
     #[test]
@@ -421,7 +383,8 @@ mod tests {
 
     #[test]
     fn test_parse_stream_event_anthropic_text() {
-        let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
+        let data =
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
         let r = parse_stream_event(data).unwrap();
         assert_eq!(r.0, "content_delta");
         assert_eq!(r.1, "hi");

@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "ai-lib-core"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -70,16 +70,13 @@ dependencies = [
 
 [[package]]
 name = "ailib-wasm-browser"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ai-lib-core",
- "getrandom 0.2.17",
  "serde",
  "serde_json",
- "uuid",
  "wasm-bindgen",
  "wasm-bindgen-test",
- "web-sys",
 ]
 
 [[package]]

@@ -99,9 +99,13 @@ impl StreamEventResult {
     }
 }
 
-/// Result of `classify_error`: contains error code, name, category, retryable.
+/// Result of `classify_error`.
+///
+/// `code` / `code_val` is the **HTTP status code** (e.g. 429), not the
+/// `E_…` protocol symbol string. Use this for client retry/routing by status.
 #[wasm_bindgen]
 pub struct ErrorClassResult {
+    /// HTTP response status (same meaning as `http_status()`).
     code_val: u32,
     name_str: String,
     category_str: String,
@@ -110,7 +114,12 @@ pub struct ErrorClassResult {
 
 #[wasm_bindgen]
 impl ErrorClassResult {
+    /// HTTP status code of the error response.
     pub fn code(&self) -> u32 {
+        self.code_val
+    }
+    /// Alias for `code()` — disambiguates from protocol `E_…` strings.
+    pub fn http_status(&self) -> u32 {
         self.code_val
     }
     pub fn name(&self) -> String {
