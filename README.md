@@ -153,6 +153,25 @@ Static files are resolved automatically: `--static-dir` CLI → `AILIB_WASM_STAT
 - Run: `just dev` or `cargo run -p ailib-wasm-test-server`
 - If `curl` static linking fails, ensure Visual Studio Build Tools (C++) are installed for MSVC.
 
+### Docker
+
+```bash
+cp .env.docker.example .env   # fill API keys
+docker compose up --build
+```
+
+Open **http://localhost:3000**. The image builds WASM + server in one multi-stage Dockerfile; static assets are served from `/app/static` inside the container.
+
+| Variable | Purpose |
+|----------|---------|
+| `DEEPSEEK_API_KEY` | DeepSeek chat API |
+| `GROQ_API_KEY` | Groq chat API |
+| `OPENAI_API_KEY` | OpenAI chat API |
+| `NVIDIA_API_KEY` | NVIDIA NIM API |
+| `PORT` | Host port mapped to container 3000 (compose) |
+
+Build clones [ai-lib-rust](https://github.com/ailib-official/ai-lib-rust) during the image build (path dependency for `wasm-browser`).
+
 ### Test
 
 ```bash
@@ -179,6 +198,28 @@ ailib-wasm-test/
 └── tests/
     └── e2e.spec.js      # Playwright E2E tests
 ```
+
+---
+
+## Which WASM? (`wasm-browser` vs `ai-lib-wasm`)
+
+This repo ships **browser WASM** (`crates/wasm-browser`). The [ai-lib-rust](https://github.com/ailib-official/ai-lib-rust) monorepo also provides **server-side WASI WASM** (`crates/ai-lib-wasm`).
+
+| | **wasm-browser** (this repo) | **ai-lib-wasm** (ai-lib-rust) |
+|--|------------------------------|-------------------------------|
+| **Target** | Browser (`wasm32-unknown-unknown`) | Server / edge (WASI, C ABI) |
+| **Binding** | wasm-bindgen → JavaScript | `extern "C"` exports, wasmtime/wasm3 |
+| **Typical host** | Chat UI + thin HTTP proxy | Gateway, batch workers, platform runtime |
+| **Interop** | `ailib_wasm.js` imported by `index.html` | Load `.wasm` via wasmtime; no JS glue |
+| **Use when** | Demoing protocol logic in the browser | Embedding protocol execution in non-JS runtimes |
+
+**Decision guide**
+
+1. Need a **web chat demo** or browser-side request building? → **wasm-browser** (this project).
+2. Need **headless protocol execution** inside Rust/Go services or WASI sandboxes? → **ai-lib-wasm**.
+3. Need both? Keep them separate: browser bundle for UI, WASI module for backend — same `ai-lib-core` logic, different targets.
+
+See also `docs/ABI_VERSIONING.md` in this repo and `crates/ai-lib-wasm/README.md` in ai-lib-rust.
 
 ---
 

@@ -142,6 +142,15 @@ export NVIDIA_API_KEY="nvapi-..."
 - PowerShell 设置密钥：`$env:DEEPSEEK_API_KEY="sk-..."`
 - MSVC 需安装 Visual Studio C++ 构建工具（`curl` static 链接）
 
+### Docker
+
+```bash
+cp .env.docker.example .env
+docker compose up --build
+```
+
+浏览器打开 **http://localhost:3000**。环境变量见 README Docker 表格。
+
 ### 测试
 
 ```bash
