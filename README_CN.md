@@ -142,6 +142,15 @@ export NVIDIA_API_KEY="nvapi-..."
 - PowerShell 设置密钥：`$env:DEEPSEEK_API_KEY="sk-..."`
 - MSVC 需安装 Visual Studio C++ 构建工具（`curl` static 链接）
 
+### Docker
+
+```bash
+cp .env.docker.example .env
+docker compose up --build
+```
+
+浏览器打开 **http://localhost:3000**。环境变量见 README Docker 表格。
+
 ### 测试
 
 ```bash
@@ -168,6 +177,18 @@ ailib-wasm-test/
 └── tests/
     └── e2e.spec.js      # Playwright 端到端测试
 ```
+
+---
+
+## 两种 WASM 架构（WASM-007）
+
+本仓库为 **浏览器 WASM**（`crates/wasm-browser`）。服务端 WASI 见 [ai-lib-rust `crates/ai-lib-wasm`](https://github.com/ailib-official/ai-lib-rust/tree/main/crates/ai-lib-wasm)。
+
+| | **wasm-browser** | **ai-lib-wasm** |
+|--|------------------|-----------------|
+| 目标 | 浏览器 | WASI / 服务端 |
+| 绑定 | wasm-bindgen | C ABI + wasmtime |
+| 场景 | 网页 Demo | 网关、批处理 |
 
 ---
 
