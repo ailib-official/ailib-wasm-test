@@ -109,6 +109,15 @@ WASM 模块通过 `wasm-bindgen` 暴露 5 个函数：
 
 ### 步骤
 
+推荐使用 [just](https://github.com/casey/just)：
+
+```bash
+just build-all
+just dev
+```
+
+手动构建：
+
 ```bash
 # 1. 构建 WASM 模块
 wasm-pack build crates/wasm-browser --target web --out-dir ../../static/wasm --out-name ailib_wasm
@@ -120,9 +129,18 @@ cargo build --release
 export DEEPSEEK_API_KEY="sk-..."
 export NVIDIA_API_KEY="nvapi-..."
 
-# 4. 启动
+# 4. 启动（在仓库根目录）
 ./target/release/ailib-wasm-test-server
 ```
+
+产物路径：WASM → `static/wasm/`；服务端 release → `target/release/ailib-wasm-test-server`。静态目录自动解析（`--static-dir` / `AILIB_WASM_STATIC_DIR` / `./static` / 工作区 `static/`），无需机器绝对路径。
+
+### Windows
+
+- 安装 Rust（MSVC 或 GNU 工具链均可）
+- `cargo install wasm-pack`；可选 `cargo install just`
+- PowerShell 设置密钥：`$env:DEEPSEEK_API_KEY="sk-..."`
+- MSVC 需安装 Visual Studio C++ 构建工具（`curl` static 链接）
 
 ### 测试
 

@@ -1,5 +1,7 @@
 /target
-**/node_modules
+**/target/
+**/node_modules/
 **/package-lock.json
+**/pkg/
 tests/test-results
 *.log

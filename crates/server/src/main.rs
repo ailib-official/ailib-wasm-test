@@ -26,7 +26,100 @@ use tower_http::cors::{Any, CorsLayer};
 
 /// Shared application state passed to all handlers.
 #[derive(Clone)]
-pub struct AppState {}
+pub struct AppState {
+    pub static_dir: std::path::PathBuf,
+}
+
+/// Server bind port and static asset root.
+pub struct ServerConfig {
+    pub port: u16,
+    pub static_dir: std::path::PathBuf,
+}
+
+fn print_usage() {
+    eprintln!(
+        "Usage: ailib-wasm-test-server [--port PORT] [--static-dir PATH]\n\
+         Env: AILIB_WASM_STATIC_DIR overrides default static resolution."
+    );
+}
+
+fn parse_cli() -> ServerConfig {
+    let mut port = 3000u16;
+    let mut static_dir_cli = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--port" => {
+                port = args
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(3000);
+            }
+            "--static-dir" => {
+                static_dir_cli = args.next().map(std::path::PathBuf::from);
+            }
+            "--help" | "-h" => {
+                print_usage();
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("unknown argument: {other}");
+                print_usage();
+                std::process::exit(2);
+            }
+        }
+    }
+    ServerConfig {
+        port,
+        static_dir: resolve_static_dir(static_dir_cli.as_deref()),
+    }
+}
+
+fn workspace_static_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../static")
+}
+
+/// Resolve the static directory path.
+/// Resolution order:
+///   1. `--static-dir` CLI flag
+///   2. `AILIB_WASM_STATIC_DIR` environment variable
+///   3. `<current working directory>/static`
+///   4. `<workspace root>/static` via `CARGO_MANIFEST_DIR`
+///   5. `<executable directory>/static` and `<executable dir>/../static`
+fn resolve_static_dir(cli_override: Option<&std::path::Path>) -> std::path::PathBuf {
+    if let Some(p) = cli_override {
+        return p.to_path_buf();
+    }
+    if let Ok(env_dir) = std::env::var("AILIB_WASM_STATIC_DIR") {
+        let p = std::path::PathBuf::from(env_dir);
+        if p.join("index.html").exists() {
+            return p;
+        }
+    }
+
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("static"));
+    }
+    candidates.push(workspace_static_dir());
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("static"));
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("static"));
+            }
+        }
+    }
+
+    for c in &candidates {
+        if c.join("index.html").exists() {
+            return c.clone();
+        }
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("static")
+}
 
 /// Resolve the API key for a provider based on the request URL.
 /// Returns None if no matching provider is found.
@@ -74,48 +167,9 @@ pub struct HealthResponse {
     pub version: String,
 }
 
-/// Resolve the static directory path.
-/// Resolution order:
-///   1. `AILIB_WASM_STATIC_DIR` environment variable (explicit override).
-///   2. `<current working directory>/static`.
-///   3. `<executable directory>/static` and `<executable dir>/../static`
-///      (covers `cargo run` and release-binary deployments).
-fn static_dir() -> std::path::PathBuf {
-    if let Ok(env_dir) = std::env::var("AILIB_WASM_STATIC_DIR") {
-        let p = std::path::PathBuf::from(env_dir);
-        if p.join("index.html").exists() {
-            return p;
-        }
-    }
-
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("static"));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("static"));
-            if let Some(parent) = dir.parent() {
-                candidates.push(parent.join("static"));
-            }
-        }
-    }
-
-    for c in &candidates {
-        if c.join("index.html").exists() {
-            return c.clone();
-        }
-    }
-    // Last-resort fallback: CWD/static even if missing; fallback_service will
-    // 404, which is preferable to panicking at startup.
-    std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join("static")
-}
-
 /// Serve index.html for the root path.
-async fn index_handler() -> Response {
-    let path = static_dir().join("index.html");
+async fn index_handler(State(state): State<Arc<AppState>>) -> Response {
+    let path = state.static_dir.join("index.html");
     match std::fs::read_to_string(&path) {
         Ok(html) => axum::response::Html(html).into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "index.html not found").into_response(),
@@ -128,13 +182,14 @@ pub fn create_app(state: AppState) -> Router {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
+    let static_dir = state.static_dir.clone();
 
     Router::new()
         .route("/health", get(health_handler))
         .route("/", get(index_handler))
         .route("/api/proxy", post(proxy_handler))
         .route("/api/proxy/stream", post(proxy_stream_handler))
-        .fallback_service(tower_http::services::ServeDir::new(static_dir()))
+        .fallback_service(tower_http::services::ServeDir::new(static_dir))
         .layer(cors)
         .with_state(Arc::new(state))
 }
@@ -389,19 +444,22 @@ fn curl_stream_proxy(
     }
 }
 
-/// Start the server on port 3000.
-pub async fn run_server() -> anyhow::Result<()> {
-    let state = AppState {};
+/// Start the server (default port 3000 unless overridden by CLI).
+pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
+    let state = AppState {
+        static_dir: config.static_dir,
+    };
     let app = create_app(state);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    println!("ailib-wasm-test-server running on http://localhost:3000");
+    let addr = format!("0.0.0.0:{}", config.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    println!("ailib-wasm-test-server running on http://localhost:{}", config.port);
     axum::serve(listener, app).await?;
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    run_server().await
+    run_server(parse_cli()).await
 }
 
 #[cfg(test)]
@@ -412,7 +470,9 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_app() -> Router {
-        let state = AppState {};
+        let state = AppState {
+            static_dir: resolve_static_dir(None),
+        };
         create_app(state)
     }
 
@@ -540,5 +600,22 @@ mod tests {
                 result.status, result.body
             );
         }
+    }
+
+    #[test]
+    fn test_resolve_static_dir_finds_workspace_static() {
+        let dir = resolve_static_dir(None);
+        assert!(
+            dir.join("index.html").exists(),
+            "expected index.html under {:?}",
+            dir
+        );
+    }
+
+    #[test]
+    fn test_resolve_static_dir_cli_override() {
+        let custom = std::path::PathBuf::from("/tmp/nonexistent-static");
+        let dir = resolve_static_dir(Some(&custom));
+        assert_eq!(dir, custom);
     }
 }
