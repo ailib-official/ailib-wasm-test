@@ -180,6 +180,18 @@ ailib-wasm-test/
 
 ---
 
+## 两种 WASM 架构（WASM-007）
+
+本仓库为 **浏览器 WASM**（`crates/wasm-browser`）。服务端 WASI 见 [ai-lib-rust `crates/ai-lib-wasm`](https://github.com/ailib-official/ai-lib-rust/tree/main/crates/ai-lib-wasm)。
+
+| | **wasm-browser** | **ai-lib-wasm** |
+|--|------------------|-----------------|
+| 目标 | 浏览器 | WASI / 服务端 |
+| 绑定 | wasm-bindgen | C ABI + wasmtime |
+| 场景 | 网页 Demo | 网关、批处理 |
+
+---
+
 ## 为什么这很重要？
 
 本项目验证了 ai-lib 生态的一个关键属性：
